@@ -24,10 +24,11 @@ class VisionTransformer(timm.models.vision_transformer.VisionTransformer):
         super(VisionTransformer, self).__init__(**kwargs)
 
         self.global_pool = global_pool
-        if self.global_pool:
+        if self.global_pool:  #global_pool=True by default
             norm_layer = kwargs['norm_layer']
             embed_dim = kwargs['embed_dim']
             self.fc_norm = norm_layer(embed_dim)
+            # self.fc_norm = norm_layer(64)
 
             del self.norm  # remove the original norm
 
@@ -41,10 +42,13 @@ class VisionTransformer(timm.models.vision_transformer.VisionTransformer):
         x = self.pos_drop(x)
 
         for blk in self.blocks:
-            x = blk(x)
+            x = blk(x)  #[64, 197, 1024]
+
 
         if self.global_pool:
-            x = x[:, 1:, :].mean(dim=1)  # global pool without cls token
+            x = x[:, 1:, :].mean(dim=1).unsqueeze(dim=1)  # global pool without cls token
+            #此处需要把x(64,1024)转换成(64,1,1024)
+
             outcome = self.fc_norm(x)
         else:
             x = self.norm(x)
@@ -62,7 +66,8 @@ def vit_base_patch16(**kwargs):
 
 def vit_large_patch16(**kwargs):
     model = VisionTransformer(
-        patch_size=16, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
+        patch_size=16, embed_dim=1024, #embed_dim=1024, 
+        depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     return model
 

@@ -41,6 +41,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         print('log_dir: {}'.format(log_writer.log_dir))
 
     for data_iter_step, (samples, targets) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+        #metric_logger.log_every 感觉是为了记录时间,内存之类的信息
 
         # we use a per iteration (instead of per epoch) lr scheduler
         if data_iter_step % accum_iter == 0:
@@ -53,7 +54,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             samples, targets = mixup_fn(samples, targets)
 
         with torch.cuda.amp.autocast():
-            outputs = model(samples)
+            outputs = model(samples) #(batch size,)            
+            #这里的output和pretrain的不一样
+            # #因为model用的是ViT而非MAE
             loss = criterion(outputs, targets)
 
         loss_value = loss.item()
