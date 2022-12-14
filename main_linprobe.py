@@ -144,7 +144,7 @@ def main(args):
     print(dataset_train)
     print(dataset_val)
 
-    if True:  # args.distributed:
+    if False:  # args.distributed:
         num_tasks = misc.get_world_size()
         global_rank = misc.get_rank()
         sampler_train = torch.utils.data.DistributedSampler(
@@ -163,6 +163,7 @@ def main(args):
     else:
         sampler_train = torch.utils.data.RandomSampler(dataset_train)
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+        global_rank = misc.get_rank()
 
     if global_rank == 0 and args.log_dir is not None and not args.eval:
         os.makedirs(args.log_dir, exist_ok=True)

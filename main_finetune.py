@@ -171,10 +171,16 @@ def main(args):
     cudnn.benchmark = True
 
     #根据train or val决定是否data aug
-    dataset_train = build_dataset(is_train=True, args=args)
-    dataset_val = build_dataset(is_train=False, args=args)
+    #由于没有train val文件夹，所以返回一样。
+    # dataset_train = build_dataset(is_train=True, args=args)
+    # dataset_val = build_dataset(is_train=False, args=args)
+    dataset = build_dataset(is_train=False, args=args)
+    train_size = int(0.8 * len(dataset))
+    test_size = len(dataset) - train_size
+    dataset_train, dataset_val = torch.utils.data.random_split(dataset, [train_size, test_size])
 
-    if True:  # args.distributed:
+
+    if False:  # args.distributed == True:
         num_tasks = misc.get_world_size()
         global_rank = misc.get_rank()
         sampler_train = torch.utils.data.DistributedSampler(
@@ -193,6 +199,7 @@ def main(args):
     else:
         sampler_train = torch.utils.data.RandomSampler(dataset_train)
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+        global_rank = misc.get_rank()
 
     if global_rank == 0 and args.log_dir is not None and not args.eval:
         os.makedirs(args.log_dir, exist_ok=True)

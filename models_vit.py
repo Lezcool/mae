@@ -47,7 +47,7 @@ class VisionTransformer(timm.models.vision_transformer.VisionTransformer):
 
         if self.global_pool:
             x = x[:, 1:, :].mean(dim=1).unsqueeze(dim=1)  # global pool without cls token
-            #此处需要把x(64,1024)转换成(64,1,1024)
+            #finetune时此处需要把x(64,1024)转换成(64,1,1024)
 
             outcome = self.fc_norm(x)
         else:

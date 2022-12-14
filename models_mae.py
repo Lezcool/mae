@@ -18,6 +18,21 @@ from timm.models.vision_transformer import PatchEmbed, Block
 
 from util.pos_embed import get_2d_sincos_pos_embed
 
+import torch.nn.functional as F 
+class MLPclassifier(nn.Module):
+    def __init__(self, input_size=1024, output_size=1):
+    #input size will be 4*res_out
+        super().__init__()
+        self.layer = nn.Sequential(
+            nn.Linear(input_size, input_size//2),
+            nn.ReLU(inplace=True),
+            nn.Linear(input_size//2, output_size),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.layer(x)
+
 
 class MaskedAutoencoderViT(nn.Module):
     """ Masked Autoencoder with VisionTransformer backbone
@@ -28,6 +43,11 @@ class MaskedAutoencoderViT(nn.Module):
                  mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False):
         super().__init__()
         #patch 大概是像素区域大小。
+
+        #Masking MLP
+        self.maskmlp = MLPclassifier(embed_dim,1)
+        self.mlp_opt = torch.optim.AdamW(self.maskmlp.parameters(),lr=0.1)
+        #self.lk,self.lm,self.mlpparam = None,None,None
         # --------------------------------------------------------------------------
         # MAE encoder specifics
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
@@ -40,8 +60,8 @@ class MaskedAutoencoderViT(nn.Module):
             # Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
             Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
             for i in range(depth)])
-        # self.norm = norm_layer(embed_dim)
-        self.norm = norm_layer(64)
+        self.norm = norm_layer(embed_dim)
+
         # --------------------------------------------------------------------------
 
         # --------------------------------------------------------------------------
@@ -124,6 +144,113 @@ class MaskedAutoencoderViT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], 3, h * p, h * p))
         return imgs
 
+    def PCAmasking(self,x,mask_ratio):
+        return
+
+
+    def MLPmasking(self, x):
+        N, L, D = x.shape  # batch, length, dim
+        with torch.no_grad():
+            for blk in self.blocks:
+                feat = blk(x)
+            feat = self.norm(feat)
+        # #x([64, 196, 1024])
+        feat = self.maskmlp(feat).squeeze()
+
+        mask_tmp = torch.round(feat)
+        if N == 1:
+            # mask = mask.unsqueeze(dim = 0)
+            mask_tmp = mask_tmp.unsqueeze(dim = 0)
+            feat = feat.unsqueeze(dim=0)
+            # x=x.unsqueeze(dim=0)
+        len_keep = int(sum(mask_tmp).min())
+        self.lm = int(sum(mask_tmp).max())
+        self.lk = len_keep
+        
+
+        if len_keep >=49:
+            len_keep = 49
+        elif len_keep < 10:
+            len_keep = 10
+
+        ids_restore = torch.argsort(feat, dim=1) #返回排序后的值所对应原a的下标
+        #(64,196)
+        ids_keep = ids_restore[:, :len_keep]
+        self.mlpfeat = torch.sort(feat,dim=1)[0][:,:len_keep]
+        x_masked = x*(1-mask_tmp).unsqueeze(-1).repeat(1, 1, D)
+        x_masked = torch.gather(x_masked, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D)) #按index从x选择patch
+        #x_masked([64, 49, 1024])
+        
+
+        # generate the binary mask: 0 is keep, 1 is remove
+        mask = torch.ones([N, L], device=x.device)
+        mask[:, :len_keep] = 0
+        # unshuffle to get the binary mask
+        mask = torch.gather(mask, dim=1, index=ids_restore)
+        return x_masked, mask, ids_restore
+
+    def MLPmasking_v1(self, x):
+        #x 已经加好embed w/o cls token
+        # print(x.shape) #[64, 196, 1024]
+        N, L, D = x.shape  # batch, length, dim
+        with torch.no_grad():
+            for blk in self.blocks:
+                feat = blk(x)
+            feat = self.norm(feat)
+        #x([64, 196, 1024])
+        feat = self.maskmlp(feat).squeeze()
+        # self.mlpfeat = feat
+        # noise = torch.rand(N, L, device=x.device)
+        # self.mlploss = F.cross_entropy(feat, noise)
+
+        mask_tmp = torch.round(feat)
+
+        #0 is keep, 1 is remove by default
+
+        #(64,196)
+        len_keep = min(int(sum(mask_tmp).min()),49)
+        self.lm = int(sum(mask_tmp).max())
+
+        self.lk = len_keep
+
+        #x_masked 也有问题
+        x_masked = x*mask_tmp.unsqueeze(-1).repeat(1, 1, D)
+        if len(feat.shape) == 1:
+            mask = mask.unsqueeze(dim = 0)
+            mask_tmp = mask_tmp.unsqueeze(dim = 0)
+            feat = feat.unsqueeze(dim=0)
+        # ids_restore = torch.argsort(feat, dim=1,descending=True)
+        x_masked = torch.sort(x_masked,dim=1,descending=True)[0][:, :len_keep,:]
+        #这里不对，相乘后得到的并非是原来的大小，因为原像素大小越大结果越大
+        
+        #下面的代码貌似有bug，导致网络输入为原始图像
+        ids_restore = torch.argsort(feat, dim=1,descending=False)
+        mask = torch.ones([N, L], device=x.device)
+        mask[:, :len_keep] = 0
+        mask = torch.gather(mask, dim=1, index=ids_restore)
+
+
+        #本来想实现每个样本mask大小不一，多于的padding为0，但是貌似很麻烦
+        # ids_shuffle = torch.argsort(feat, dim=1)  # ascend: small is keep, large is remove
+        # ids_restore = torch.argsort(ids_shuffle, dim=1) #返回排序后的值所对应原a的下标
+        # #(64,196)
+
+        # ids_keep = ids_shuffle[:, :len_keep]
+        # x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D)) #选取其中多个且乱序的值
+
+        # # generate the binary mask: 0 is keep, 1 is remove
+        # mask = torch.ones([N, L], device=x.device)
+        # mask[:, :len_keep] = 0
+        # # unshuffle to get the binary mask
+        # mask = torch.gather(mask, dim=1, index=ids_restore)
+        return x_masked, mask, ids_restore
+    def print_lk(self):
+        try:
+            print('keep len:',self.lk,self.lm)
+            print('sum mlp param:',float(self.mlpparam))
+        except:
+            pass
+
     def random_masking(self, x, mask_ratio):
         """
         Perform per-sample random masking by per-sample shuffling.
@@ -134,20 +261,24 @@ class MaskedAutoencoderViT(nn.Module):
         len_keep = int(L * (1 - mask_ratio))
         
         noise = torch.rand(N, L, device=x.device)  # noise in [0, 1]
-        
+        #因为noise是一堆小数
+
         # sort noise for each sample
         ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
         ids_restore = torch.argsort(ids_shuffle, dim=1) #返回排序后的值所对应原a的下标
+        #(64,196)
 
         # keep the first subset
         ids_keep = ids_shuffle[:, :len_keep]
         x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D)) #选取其中多个且乱序的值
+        #x_masked([64, 49, 1024])
 
         # generate the binary mask: 0 is keep, 1 is remove
         mask = torch.ones([N, L], device=x.device)
         mask[:, :len_keep] = 0
         # unshuffle to get the binary mask
         mask = torch.gather(mask, dim=1, index=ids_restore)
+        #mask(64,196)
 
         return x_masked, mask, ids_restore
 
@@ -160,7 +291,8 @@ class MaskedAutoencoderViT(nn.Module):
         x = x + self.pos_embed[:, 1:, :]
  
         # masking: length -> length * mask_ratio
-        x, mask, ids_restore = self.random_masking(x, mask_ratio)
+        # x, mask, ids_restore = self.random_masking(x, mask_ratio)
+        x, mask, ids_restore = self.MLPmasking(x)
 
         # append cls token
         cls_token = self.cls_token + self.pos_embed[:, :1, :]
@@ -171,10 +303,27 @@ class MaskedAutoencoderViT(nn.Module):
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
+        #x(64,25,1024) 维度不一样，不是169
+
+
+        # 第一次经过mlp和第二次被剪裁的输出应该一样
+        with torch.no_grad():
+            feat = self.maskmlp(x).squeeze()[:,1:]
+        mlploss=F.cross_entropy(self.mlpfeat, feat)
+        self.mlp_opt.zero_grad()
+        mlploss.backward(retain_graph=True)
+        self.mlp_opt.step()
 
         return x, mask, ids_restore
 
+    def update_mlp(self):
+        
+        self.mlp_opt.zero_grad()
+        # self.mlploss.backward()
+        self.mlp_opt.step()
+
     def forward_decoder(self, x, ids_restore):
+
         # embed tokens
         x = self.decoder_embed(x)
 
@@ -216,12 +365,17 @@ class MaskedAutoencoderViT(nn.Module):
         loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
 
         loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
+
         return loss
 
     def forward(self, imgs, mask_ratio=0.75):
         latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
         pred = self.forward_decoder(latent, ids_restore)  # [N, L, p*p*3]
         loss = self.forward_loss(imgs, pred, mask)
+        
+        self.mlpparam = sum(list(self.maskmlp.parameters())[0][0])
+        # print(sum(list(self.maskmlp.parameters())[0][0]))
+        # print(list(self.maskmlp.parameters())[0][0])
         return loss, pred, mask
 
 

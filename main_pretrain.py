@@ -33,7 +33,7 @@ from util.misc import NativeScalerWithGradNormCount as NativeScaler
 import models_mae
 
 from engine_pretrain import train_one_epoch
-
+from itertools import chain
 
 def get_args_parser():
     parser = argparse.ArgumentParser('MAE pre-training', add_help=False)
@@ -129,7 +129,7 @@ def main(args):
     dataset_train = datasets.ImageFolder(args.data_path, transform=transform_train)
     print(dataset_train)
 
-    if True:  # args.distributed:
+    if False:  # args.distributed:
         num_tasks = misc.get_world_size()
         global_rank = misc.get_rank()
         sampler_train = torch.utils.data.DistributedSampler(
@@ -138,6 +138,7 @@ def main(args):
         print("Sampler_train = %s" % str(sampler_train))
     else:
         sampler_train = torch.utils.data.RandomSampler(dataset_train)
+        global_rank = misc.get_rank()
 
     if global_rank == 0 and args.log_dir is not None:
         os.makedirs(args.log_dir, exist_ok=True)
@@ -180,6 +181,7 @@ def main(args):
     # param_groups = optim_factory.add_weight_decay(model_without_ddp, args.weight_decay)
     param_groups = optim_factory.param_groups_weight_decay(model_without_ddp, args.weight_decay)
     optimizer = torch.optim.AdamW(param_groups, lr=args.lr, betas=(0.9, 0.95))
+    
     print(optimizer)
     loss_scaler = NativeScaler()
 
@@ -209,6 +211,10 @@ def main(args):
                 log_writer.flush()
             with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                 f.write(json.dumps(log_stats) + "\n")
+
+        print('sum of mlp param:',float(sum(list(model.maskmlp.parameters())[0][0])))
+        # print(list(model.maskmlp.parameters())[0][0])
+        model.print_lk()
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
