@@ -104,6 +104,39 @@ def get_args_parser():
     return parser
 
 
+#https://discuss.pytorch.org/t/data-loader-first-batch-from-each-epoch-is-slow/92844/2?u=xiaodongww
+#https://blog.csdn.net/a237072751/article/details/124599426
+class MultiEpochsDataLoader(torch.utils.data.DataLoader):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._DataLoader__initialized = False
+        self.batch_sampler = _RepeatSampler(self.batch_sampler)
+        self._DataLoader__initialized = True
+        self.iterator = super().__iter__()
+
+    def __len__(self):
+        return len(self.batch_sampler.sampler)
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield next(self.iterator)
+
+
+class _RepeatSampler(object):
+    """ Sampler that repeats forever.
+    Args:
+        sampler (Sampler)
+    """
+
+    def __init__(self, sampler):
+        self.sampler = sampler
+
+    def __iter__(self):
+        while True:
+            yield from iter(self.sampler)
+
+
 def main(args):
     misc.init_distributed_mode(args)
 
@@ -146,7 +179,8 @@ def main(args):
     else:
         log_writer = None
 
-    data_loader_train = torch.utils.data.DataLoader(
+
+    data_loader_train = MultiEpochsDataLoader( #torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
         batch_size=args.batch_size,
         num_workers=args.num_workers,

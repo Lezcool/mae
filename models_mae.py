@@ -148,7 +148,47 @@ class MaskedAutoencoderViT(nn.Module):
         return
 
 
-    def MLPmasking(self, x):
+    def MLPmasking_v3(self,x):
+        #Idea 3.2.1.6
+        N, L, D = x.shape  # batch, length, dim
+        with torch.no_grad():
+            for blk in self.blocks:
+                feat = blk(x)
+            feat = self.norm(feat)
+        feat = self.maskmlp(feat).squeeze()
+        dummy_target = torch.zeros(feat.shape,device=x.device)
+        # with torch.cuda.amp.autocast(enabled=False):
+        #     self.mlploss = F.binary_cross_entropy(feat.float(), dummy_target.float())
+        # print(self.mlploss)
+        mask_tmp = torch.round(feat) #round(0.5)=0 sum(mask_tmp) 
+        len_keep = int(min(mask_tmp.shape[1] - mask_tmp.sum(axis=1)))
+        if len_keep < 10: len_keep = 10
+        # self.mlploss = self.mlploss + (len_keep-49)/10*(self.mlploss+0.1)
+        # print(self.mlploss)
+
+        if N == 1:
+            mask_tmp = mask_tmp.unsqueeze(dim = 0)
+            feat = feat.unsqueeze(dim=0)
+            
+        self.lm = int(max(mask_tmp.shape[1] - mask_tmp.sum(axis=1)))
+        self.lk = len_keep
+
+        ids_restore = torch.argsort(feat, dim=1) #返回排序后的值所对应原a的下标
+        #(64,196)
+        ids_keep = ids_restore[:, :len_keep]
+
+        self.mlpfeat = torch.sort(feat,dim=1)[0][:,:len_keep]
+        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
+
+        # generate the binary mask: 0 is keep, 1 is remove
+        mask = torch.ones([N, L], device=x.device)
+        mask[:, :len_keep] = 0
+        # unshuffle to get the binary mask
+        mask = torch.gather(mask, dim=1, index=ids_restore)
+        return x_masked, mask, ids_restore
+
+    def MLPmasking_v2(self, x):
+        #Idea  3.2.1.3
         N, L, D = x.shape  # batch, length, dim
         with torch.no_grad():
             for blk in self.blocks:
@@ -157,16 +197,22 @@ class MaskedAutoencoderViT(nn.Module):
         # #x([64, 196, 1024])
         feat = self.maskmlp(feat).squeeze()
 
-        mask_tmp = torch.round(feat)
+        mask_tmp = torch.round(feat) #round(0.5)=0
         if N == 1:
             # mask = mask.unsqueeze(dim = 0)
             mask_tmp = mask_tmp.unsqueeze(dim = 0)
             feat = feat.unsqueeze(dim=0)
             # x=x.unsqueeze(dim=0)
-        len_keep = int(sum(mask_tmp).min())
-        self.lm = int(sum(mask_tmp).max())
-        self.lk = len_keep
         
+        sys.exit()
+        # Wrong way to calc len keep
+        # len_keep = int(sum(mask_tmp).min())
+        # self.lm = int(sum(mask_tmp).max())
+        # self.lk = len_keep
+
+        len_keep = int(min(mask_tmp.shape[1] - mask_tmp.sum(axis=1)))
+        self.lm = int(max(mask_tmp.shape[1] - mask_tmp.sum(axis=1)))
+        self.lk = len_keep
 
         if len_keep >=49:
             len_keep = 49
@@ -190,6 +236,7 @@ class MaskedAutoencoderViT(nn.Module):
         return x_masked, mask, ids_restore
 
     def MLPmasking_v1(self, x):
+        # Idea 3.2.1.2
         #x 已经加好embed w/o cls token
         # print(x.shape) #[64, 196, 1024]
         N, L, D = x.shape  # batch, length, dim
@@ -248,6 +295,7 @@ class MaskedAutoencoderViT(nn.Module):
         try:
             print('keep len:',self.lk,self.lm)
             print('sum mlp param:',float(self.mlpparam))
+            print('mlploss:',float(self.mlploss))
         except:
             pass
 
@@ -292,7 +340,7 @@ class MaskedAutoencoderViT(nn.Module):
  
         # masking: length -> length * mask_ratio
         # x, mask, ids_restore = self.random_masking(x, mask_ratio)
-        x, mask, ids_restore = self.MLPmasking(x)
+        x, mask, ids_restore = self.MLPmasking_v3(x)
 
         # append cls token
         cls_token = self.cls_token + self.pos_embed[:, :1, :]
@@ -307,19 +355,20 @@ class MaskedAutoencoderViT(nn.Module):
 
 
         # 第一次经过mlp和第二次被剪裁的输出应该一样
-        with torch.no_grad():
-            feat = self.maskmlp(x).squeeze()[:,1:]
-        mlploss=F.cross_entropy(self.mlpfeat, feat)
-        self.mlp_opt.zero_grad()
-        mlploss.backward(retain_graph=True)
-        self.mlp_opt.step()
+        # with torch.no_grad():
+        #     feat = self.maskmlp(x).squeeze()[:,1:]
+        # mlploss=F.cross_entropy(self.mlpfeat, feat)
+        # self.mlp_opt.zero_grad()
+        # mlploss.backward(retain_graph=True)
+        # self.mlp_opt.step()
 
         return x, mask, ids_restore
 
-    def update_mlp(self):
+    def update_mlp(self,ViTloss):
         
+        self.mlploss = ViTloss# + (self.lk-49)/100*ViTloss
         self.mlp_opt.zero_grad()
-        # self.mlploss.backward()
+        self.mlploss.backward(retain_graph=True)
         self.mlp_opt.step()
 
     def forward_decoder(self, x, ids_restore):
