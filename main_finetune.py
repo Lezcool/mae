@@ -16,6 +16,7 @@ import numpy as np
 import os
 import time
 from pathlib import Path
+import wandb
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -33,7 +34,7 @@ import util.misc as misc
 from util.datasets import build_dataset
 from util.pos_embed import interpolate_pos_embed
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
-
+from util.misc import *
 import models_vit
 
 from engine_finetune import train_one_epoch, evaluate
@@ -46,7 +47,9 @@ def get_args_parser():
     parser.add_argument('--epochs', default=50, type=int)
     parser.add_argument('--accum_iter', default=1, type=int,
                         help='Accumulate gradient iterations (for increasing the effective batch size under memory constraints)')
-
+    parser.add_argument('--log_name', default='', type=str)
+    parser.add_argument('--comments', default=' ', type=str)
+    parser.add_argument('--save_per', default=10, type=int)
     # Model parameters
     parser.add_argument('--model', default='vit_large_patch16', type=str, metavar='MODEL',
                         help='Name of model to train')
@@ -117,12 +120,12 @@ def get_args_parser():
                         help='Use class token instead of global pool for classification')
 
     # Dataset parameters
-    parser.add_argument('--data_path', default='/datasets01/imagenet_full_size/061417/', type=str,
+    parser.add_argument('--data_path', default='C:/Users/lewa/Documents/PhD/dataset/mini_imgnet_ori', type=str,
                         help='dataset path')
-    parser.add_argument('--nb_classes', default=1000, type=int,
+    parser.add_argument('--nb_classes', default=100, type=int,
                         help='number of the classification types')
 
-    parser.add_argument('--output_dir', default='./output_dir',
+    parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
     parser.add_argument('--log_dir', default='./output_dir',
                         help='path where to tensorboard log')
@@ -177,8 +180,8 @@ def main(args):
     dataset = build_dataset(is_train=False, args=args)
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
-    dataset_train, dataset_val = torch.utils.data.random_split(dataset, [train_size, test_size])
-
+    # dataset_train, dataset_val = torch.utils.data.random_split(dataset, [train_size, test_size])
+    dataset_train,dataset_val,dataset_test = torch.utils.data.random_split(dataset,[0.7,0.2,0.1], generator=torch.Generator().manual_seed(42))
 
     if False:  # args.distributed == True:
         num_tasks = misc.get_world_size()
@@ -207,7 +210,7 @@ def main(args):
     else:
         log_writer = None
 
-    data_loader_train = torch.utils.data.DataLoader(
+    data_loader_train = MultiEpochsDataLoader(#torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -215,7 +218,7 @@ def main(args):
         drop_last=True,
     )
 
-    data_loader_val = torch.utils.data.DataLoader(
+    data_loader_val =MultiEpochsDataLoader(# torch.utils.data.DataLoader(
         dataset_val, sampler=sampler_val,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -241,7 +244,15 @@ def main(args):
     )
 
     if args.finetune and not args.eval:
-        checkpoint = torch.load(args.finetune, map_location='cpu')
+        if os.path.exists(args.finetune):
+            checkpoint = torch.load(args.finetune, map_location='cpu')
+        else:
+            file_path = os.path.dirname(args.finetune)
+            file = sorted([f for f in os.listdir(file_path) if f.endswith('.pth')],key=sort_key)[-1]
+            if len(file)==0: assert print('File not found')
+            args.finetune= os.path.join(file_path,file)
+            print('The specified file was not found, but find %s, start to load'%args.finetune)
+            checkpoint = torch.load(args.finetune, map_location='cpu')
 
         print("Load pre-trained checkpoint from: %s" % args.finetune)
         checkpoint_model = checkpoint['model']
@@ -317,7 +328,19 @@ def main(args):
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     max_accuracy = 0.0
+    config={'comments':args.comments}
+    config.update(vars(args))
+    if args.log_name:
+        print('wandb log on, start 5s later \n')
+        time.sleep(5)
+        wandb.init(project="mae",name=args.log_name, entity="lez",config=config)
+    else:
+        wandb.init(mode="disabled")
+        print('wandb log off, start 5s later \n')
+        time.sleep(5)
+        #input('wandb log off, press enter to continue \n')
 
+    early_stopping = EarlyStopping()
     #开始 train
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
@@ -333,6 +356,12 @@ def main(args):
             misc.save_model(
                 args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                 loss_scaler=loss_scaler, epoch=epoch)
+            if epoch % args.save_per == 0:
+                pass
+            else:
+                pthfile = os.path.join(args.output_dir,f'checkpoint-{epoch-1}.pth')
+                if os.path.exists(pthfile):
+                    os.remove(pthfile)
 
         test_stats = evaluate(data_loader_val, model, device)
         print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
@@ -343,7 +372,11 @@ def main(args):
             log_writer.add_scalar('perf/test_acc1', test_stats['acc1'], epoch)
             log_writer.add_scalar('perf/test_acc5', test_stats['acc5'], epoch)
             log_writer.add_scalar('perf/test_loss', test_stats['loss'], epoch)
-
+        wandb.log({'val/acc1':test_stats['acc1'],'val/acc5':test_stats['acc5'],'val/loss':test_stats['loss']})
+        early_stopping(test_stats['acc1'])
+        if early_stopping.early_stop:
+            print("Early stopping")
+            break
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                         **{f'test_{k}': v for k, v in test_stats.items()},
                         'epoch': epoch,

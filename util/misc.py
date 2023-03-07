@@ -20,7 +20,64 @@ import torch
 import torch.distributed as dist
 from torch._six import inf
 
+class MultiEpochsDataLoader(torch.utils.data.DataLoader):
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._DataLoader__initialized = False
+        self.batch_sampler = _RepeatSampler(self.batch_sampler)
+        self._DataLoader__initialized = True
+        self.iterator = super().__iter__()
+
+    def __len__(self):
+        return len(self.batch_sampler.sampler)
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield next(self.iterator)
+class _RepeatSampler(object):
+    """ Sampler that repeats forever.
+    Args:
+        sampler (Sampler)
+    """
+
+    def __init__(self, sampler):
+        self.sampler = sampler
+
+    def __iter__(self):
+        while True:
+            yield from iter(self.sampler)
+import re
+def sort_key(s):
+    #sort_strings_with_embedded_numbers
+    re_digits = re.compile(r'(\d+)')
+    pieces = re_digits.split(s)  # 切成数字与非数字
+    pieces[1::2] = map(int, pieces[1::2])  # 将数字部分转成整数
+    return pieces
+
+class EarlyStopping:
+    def __init__(self, patience=3, verbose=False, delta=1):
+        self.patience = patience
+        self.verbose = verbose
+        self.delta = delta
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        
+    def __call__(self, acc):
+        score = acc
+
+        if self.best_score is None:
+            self.best_score = score
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            if self.verbose:
+                print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.counter = 0
 class SmoothedValue(object):
     """Track a series of values and provide access to smoothed values over a
     window or the global series average.
@@ -154,6 +211,7 @@ class MetricLogger(object):
                         meters=str(self),
                         time=str(iter_time), data=str(data_time),
                         memory=torch.cuda.max_memory_allocated() / MB))
+                    
                 else:
                     print(log_msg.format(
                         i, len(iterable), eta=eta_string,
@@ -254,8 +312,11 @@ class NativeScalerWithGradNormCount:
     def __init__(self):
         self._scaler = torch.cuda.amp.GradScaler()
 
-    def __call__(self, loss, optimizer, clip_grad=None, parameters=None, create_graph=False, update_grad=True):
-        self._scaler.scale(loss).backward(create_graph=create_graph)
+    def __call__(self, loss, optimizer, clip_grad=None, parameters=None, create_graph=False, update_grad=True,mask_type='random'):
+        if mask_type=='mlpsoft':
+            self._scaler.scale(loss).backward(create_graph=create_graph,retain_graph=True)
+        else:
+            self._scaler.scale(loss).backward(create_graph=create_graph)
         if update_grad:
             if clip_grad is not None:
                 assert parameters is not None
@@ -296,8 +357,8 @@ def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler):
     output_dir = Path(args.output_dir)
     epoch_name = str(epoch)
     if loss_scaler is not None:
-        # checkpoint_paths = [output_dir / ('checkpoint-%s.pth' % epoch_name)]
-        checkpoint_paths = [output_dir / ('checkpoint.pth')]
+        checkpoint_paths = [output_dir / ('checkpoint-%s.pth' % epoch_name)]
+        # checkpoint_paths = [output_dir / ('checkpoint.pth')]
         for checkpoint_path in checkpoint_paths:
             to_save = {
                 'model': model_without_ddp.state_dict(),
@@ -310,8 +371,8 @@ def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler):
             save_on_master(to_save, checkpoint_path)
     else:
         client_state = {'epoch': epoch}
-        # model.save_checkpoint(save_dir=args.output_dir, tag="checkpoint-%s" % epoch_name, client_state=client_state)
-        model.save_checkpoint(save_dir=args.output_dir, tag="checkpoint", client_state=client_state)
+        model.save_checkpoint(save_dir=args.output_dir, tag="checkpoint-%s" % epoch_name, client_state=client_state)
+        # model.save_checkpoint(save_dir=args.output_dir, tag="checkpoint", client_state=client_state)
 
 
 

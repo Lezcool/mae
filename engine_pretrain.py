@@ -16,7 +16,7 @@ import torch
 
 import util.misc as misc
 import util.lr_sched as lr_sched
-
+import wandb
 
 def train_one_epoch(model: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
@@ -24,10 +24,11 @@ def train_one_epoch(model: torch.nn.Module,
                     log_writer=None,
                     args=None):
     model.train(True)
+    
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 20
+    print_freq = 300 #20
 
     accum_iter = args.accum_iter
 
@@ -50,14 +51,35 @@ def train_one_epoch(model: torch.nn.Module,
         loss_value = loss.item()
 
         if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
+            print("MAELoss is {}, stopping training".format(loss_value))
             sys.exit(1)
 
+        if model.mask_type=='mlpsoft' or model.mask_type=='mlpsoft2hard':
+            if not math.isfinite(model.mlp_varloss.item()):
+                print("MLPLoss is {}, stopping training".format(loss_value))
+                sys.exit(1)
+
         loss /= accum_iter
-        model.update_mlp(loss)
+        if model.mask_type=='mlpsoft' or model.mask_type=='mlpsoft2hard':
+            wandb.log({"mlp_varloss": model.mlp_varloss,
+                       "mlp_varloss1": model.mlp_varloss1, "mlp_varloss2": model.mlp_varloss2,
+                       "loss": loss,"total_loss":loss + max(-0.5,model.mlp_varloss * 0.05)})
+            loss = loss + max(-0.5,model.mlp_varloss * 0.05)
+            # loss = loss/loss.detach() + model.mlp_varloss/model.mlp_varloss.detach()
+
+        else:
+            wandb.log({"loss": loss})
+        # model.update_mlp(loss)
+        # try:
+        #     model.update_mlp(loss)
+        # except:
+        #     print('pass update mlp')
         loss_scaler(loss, optimizer, parameters=model.parameters(),
-                    update_grad=(data_iter_step + 1) % accum_iter == 0)
-        # input('stop')
+                    update_grad=(data_iter_step + 1) % accum_iter == 0,mask_type=model.mask_type)
+        
+        if model.mask_type=='mlpsoft':
+            model.update_mlp(loss)
+
         
 
         if (data_iter_step + 1) % accum_iter == 0:

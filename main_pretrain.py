@@ -15,12 +15,15 @@ import numpy as np
 import os
 import time
 from pathlib import Path
+import sys
 
 import torch
 import torch.backends.cudnn as cudnn
 from torch.utils.tensorboard import SummaryWriter
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
+import wandb
+import torchvision.transforms as T
 
 import timm
 
@@ -42,7 +45,13 @@ def get_args_parser():
     parser.add_argument('--epochs', default=400, type=int)
     parser.add_argument('--accum_iter', default=1, type=int,
                         help='Accumulate gradient iterations (for increasing the effective batch size under memory constraints)')
-
+    parser.add_argument('--comments', default='', type=str)
+    parser.add_argument('--save_per', default=10, type=int)
+    parser.add_argument('--log_name', default='', type=str)
+    parser.add_argument('--mask_type',default='random',type=str,help='random or mlpsoft or rand_soft')
+    parser.add_argument('--mlp_grl', action='store_true')
+    parser.add_argument('--add_noise', action='store_true')
+    parser.add_argument('--alttype', default='', type=str)
     # Model parameters
     parser.add_argument('--model', default='mae_vit_large_patch16', type=str, metavar='MODEL',
                         help='Name of model to train')
@@ -68,11 +77,11 @@ def get_args_parser():
     parser.add_argument('--min_lr', type=float, default=0., metavar='LR',
                         help='lower lr bound for cyclic schedulers that hit 0')
 
-    parser.add_argument('--warmup_epochs', type=int, default=40, metavar='N',
+    parser.add_argument('--warmup_epochs', type=int, default=5, metavar='N',
                         help='epochs to warmup LR')
 
     # Dataset parameters
-    parser.add_argument('--data_path', default='/datasets01/imagenet_full_size/061417/', type=str,
+    parser.add_argument('--data_path', default='C:/Users/lewa/Documents/PhD/dataset/mini_imgnet_ori', type=str,
                         help='dataset path')
 
     parser.add_argument('--output_dir', default='./output_dir',
@@ -137,6 +146,7 @@ class _RepeatSampler(object):
             yield from iter(self.sampler)
 
 
+
 def main(args):
     misc.init_distributed_mode(args)
 
@@ -153,14 +163,25 @@ def main(args):
     cudnn.benchmark = True
 
     # simple augmentation
-    transform_train = transforms.Compose([
-            transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+    if args.mask_type == 'random' or 'rand_soft':
+        transform_train = transforms.Compose([
+                transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+    else:
+        transform_train = transforms.Compose([
+                transforms.Resize(args.input_size, interpolation=3),  # 3 is bicubic
+                transforms.RandomRotation(), 
+                transforms.AutoAugment(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
     # dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
-    dataset_train = datasets.ImageFolder(args.data_path, transform=transform_train)
-    print(dataset_train)
+    dataset = datasets.ImageFolder(args.data_path, transform=transform_train)
+    dataset_train,dataset_val,dataset_test = torch.utils.data.random_split(dataset,[0.7,0.2,0.1], generator=torch.Generator().manual_seed(42))
+    print('len of dataset_train,dataset_val,dataset_test = ',len(dataset_train),len(dataset_val),len(dataset_test))
+    # dataset_train.transform = transform_train
+    # print(dataset_train)
 
     if False:  # args.distributed:
         num_tasks = misc.get_world_size()
@@ -181,20 +202,21 @@ def main(args):
 
 
     data_loader_train = MultiEpochsDataLoader( #torch.utils.data.DataLoader(
+    # data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
         drop_last=True,
     )
-    
+
     # define the model
-    model = models_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss)
+    model = models_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss,mlp_grl=args.mlp_grl)
 
     model.to(device)
 
     model_without_ddp = model
-    print("Model = %s" % str(model_without_ddp))
+    # print("Model = %s" % str(model_without_ddp))
 
     eff_batch_size = args.batch_size * args.accum_iter * misc.get_world_size()
     
@@ -216,14 +238,37 @@ def main(args):
     param_groups = optim_factory.param_groups_weight_decay(model_without_ddp, args.weight_decay)
     optimizer = torch.optim.AdamW(param_groups, lr=args.lr, betas=(0.9, 0.95))
     
-    print(optimizer)
+    # print(optimizer)
     loss_scaler = NativeScaler()
 
     misc.load_model(args=args, model_without_ddp=model_without_ddp, optimizer=optimizer, loss_scaler=loss_scaler)
 
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
+    config={'comments':args.comments}
+    config.update(vars(args))
+    if args.log_name:
+        print('wandb log on, start 5s later \n')
+        time.sleep(5)
+        wandb.init(project="mae",name=args.log_name, entity="lez",config=config)
+    else:
+        wandb.init(mode="disabled")
+        print('wandb log off, start 5s later \n')
+        time.sleep(5)
+        #input('wandb log off, press enter to continue \n')
+    
+    model.mask_type= args.mask_type
+    model.max_epoch = args.epochs
+    if args.add_noise:
+        model.add_noise = True
     for epoch in range(args.start_epoch, args.epochs):
+        # if epoch ==  args.epochs//2 and model.maskmlp.grl ==False: 
+        #     model.maskmlp.grl = True
+        if epoch >= 10 and args.alttype == 'random':
+            model.mask_type = 'random'
+
+        model.epoch = epoch
+
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
         train_stats = train_one_epoch(
@@ -232,11 +277,17 @@ def main(args):
             log_writer=log_writer,
             args=args
         )
-        if args.output_dir and (epoch % 20 == 0 or epoch + 1 == args.epochs):
+        if args.output_dir:
             misc.save_model(
                 args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                 loss_scaler=loss_scaler, epoch=epoch)
-
+            if epoch % args.save_per == 0:
+                pass
+            else:
+                pthfile = os.path.join(args.output_dir,f'checkpoint-{epoch-1}.pth')
+                if os.path.exists(pthfile):
+                    os.remove(pthfile)
+                
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                         'epoch': epoch,}
 
@@ -245,8 +296,10 @@ def main(args):
                 log_writer.flush()
             with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                 f.write(json.dumps(log_stats) + "\n")
-
-        print('sum of mlp param:',float(sum(list(model.maskmlp.parameters())[0][0])))
+        mlp_param = float(sum(list(model.maskmlp.parameters())[0][0]))
+        print('sum of mlp param:',mlp_param,'diff_x=',model.diff)
+        
+        wandb.log({'sum of mlp param':mlp_param,'sum_ids':model.ids_keep,'diff_x':model.diff})
         # print(list(model.maskmlp.parameters())[0][0])
         model.print_lk()
 
