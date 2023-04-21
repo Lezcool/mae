@@ -16,7 +16,7 @@ import numpy as np
 import os
 import time
 from pathlib import Path
-
+ 
 import torch
 import torch.backends.cudnn as cudnn
 from torch.utils.tensorboard import SummaryWriter
@@ -318,7 +318,7 @@ def main(args):
         print('wandb log off, start 5s later \n')
         time.sleep(5)
         #input('wandb log off, press enter to continue \n')
-    early_stopping = EarlyStopping(delta=0.5)
+    early_stopping = EarlyStopping(delta=0.2)
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)

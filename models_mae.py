@@ -101,7 +101,7 @@ class MaskedAutoencoderViT(nn.Module):
             Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
-
+        self.norm2 = norm_layer(embed_dim+1)
         # --------------------------------------------------------------------------
         self.mask_type = mask_type
         # --------------------------------------------------------------------------
@@ -197,6 +197,61 @@ class MaskedAutoencoderViT(nn.Module):
         pairwise_distances = (s.transpose(1, 2) - s_sorted).abs().neg() / tau
         P_hat = pairwise_distances.softmax(-1)
         return P_hat
+    def imp_samp(self,feat, k_size):
+        # return sampled[64,49],ids_restore[64,196]
+        importance = feat / torch.sum(feat, dim=1, keepdim=True)
+        indices = torch.multinomial(importance, k_size, replacement=False)
+        sampled = torch.gather(feat, 1, indices) # or torch.index_select(feat, 1, indices.view(-1)).view(64, k_size)
+
+        range = torch.arange(feat.shape[1],device=feat.device)
+        mask = (indices.unsqueeze(2) != range).all(1)
+        ids_keep = torch.masked_select(range, mask).view(feat.shape[0], -1)
+        ids_restore = torch.cat([indices, ids_keep], dim=1)
+        return sampled,ids_restore,indices,ids_keep
+    
+    def MLPmasking_is(self, x,mask_ratio):
+        # importance sampling
+        N, L, D = x.shape  # batch, length, dim
+        cls_token = self.cls_token + self.pos_embed[:, :1, :]
+        cls_tokens = cls_token.expand(x.shape[0], -1, -1)
+        x_cls = torch.cat((cls_tokens, x), dim=1) #[32, 197, 1024]
+        len_keep = int(L * (1 - mask_ratio))
+        with torch.no_grad():
+            for blk in self.blocks:
+                x_cls = blk(x_cls)
+            feat = self.norm(x_cls) #[32, 197, 1024]
+        alpha = self.get_alpha(self.epoch,self.max_epoch)
+        feat = self.maskmlp(feat,0.1*alpha)[:,1:,:].squeeze()
+        if len(feat.shape) == 1: feat = feat.unsqueeze(0) # if bacthsize=1
+
+        
+        feat = (feat-feat.min(1)[0].unsqueeze(dim=-1))/((feat.max(1)[0]-feat.min(1)[0]).unsqueeze(dim=-1))
+        sampled,ids_restore,indices,ids_keep = self.imp_samp(feat, len_keep)
+        self.ids_keep = ids_keep.sum()
+        self.sampled =feat
+        
+        # use soft sort
+        #mask = self.soft_sort(feat,1e-1)[:,:len_keep,:].sum(1) # max value can be >1
+        #mask = (mask-mask.min(1)[0].unsqueeze(dim=-1))/((mask.max(1)[0]-mask.min(1)[0]).unsqueeze(dim=-1))
+        #softmaked_img = mask.unsqueeze(-1) * x
+        
+        # use feat
+        # softmaked_img = feat.unsqueeze(-1) * x
+
+        # concat feat and x
+        softmaked_img = torch.concat([feat.unsqueeze(dim=-1),x],dim=2) #[64, 196, 1025]
+        
+        x_hardmasked = torch.gather(softmaked_img, 1, indices.unsqueeze(dim=-1).repeat(1,1,D))
+
+        self.mlp_varloss = -feat.var(axis=1).sum()*0.3 - (feat[:,:-1]-feat[:,1:]).var(axis=1).sum()*0.7
+        self.mlp_varloss1 = -feat.var(axis=1).sum()
+        self.mlp_varloss2 = - (feat[:,:-1]-feat[:,1:]).var(axis=1).sum()
+        
+        mask = torch.zeros_like(x[:,:,0])
+        mask.scatter_(1, indices, 1)
+        mask = 1-mask
+
+        return x_hardmasked,mask, ids_restore
     
     def MLPmasking_hard(self,x,mask_ratio):
 
@@ -256,6 +311,8 @@ class MaskedAutoencoderViT(nn.Module):
         alpha = self.get_alpha(self.epoch,self.max_epoch)
         feat = self.maskmlp(feat,0.1*alpha)[:,1:,:].squeeze()  #alpha only for gradient reversal layer
         if len(feat.shape) == 1: feat = feat.unsqueeze(0) # if bacthsize=1
+        if self.add_noise:
+            feat = feat + torch.randn_like(feat)*0.1
         feat = (feat-feat.min(1)[0].unsqueeze(dim=-1))/((feat.max(1)[0]-feat.min(1)[0]).unsqueeze(dim=-1)) #norm each pateches
         self.mlp_varloss = -feat.var(axis=1).sum()*0.3 - 0.7* (feat[:,:-1]-feat[:,1:]).var(axis=1).sum() #try not to keep nearby patches
         self.mlp_varloss1 = -feat.var(axis=1).sum()
@@ -527,20 +584,23 @@ class MaskedAutoencoderViT(nn.Module):
             x, mask, ids_restore = self.random_masking_soft(x,mask_ratio)
         elif self.mask_type == 'mlpsoft2hard':
             x, mask, ids_restore = self.MLPmasking_hard(x,mask_ratio)
+        elif self.mask_type == 'mlpis': #mlp important sampling
+            x, mask, ids_restore = self.MLPmasking_is(x,mask_ratio)
         else:
             assert print('Wrong mask type: random, mlpsoft, rand_soft, mlpsoft2hard')
             
         
         # append cls token
         cls_token = self.cls_token + self.pos_embed[:, :1, :]
-        cls_tokens = cls_token.expand(x.shape[0], -1, -1)
+        cls_tokens = cls_token.expand(x.shape[0], -1, -1) #[64, 1, 768]
+
         x = torch.cat((cls_tokens, x), dim=1)
 
         # apply Transformer blocks
         for blk in self.blocks:
-            x = blk(x)
+            x = blk(x)      
         x = self.norm(x)
-        #x(64,25,1024) 维度不一样，不是196
+        #x(64,49,1024) 维度不一样，不是196
 
 
         # 第一次经过mlp和第二次被剪裁的输出应该一样
@@ -584,6 +644,7 @@ class MaskedAutoencoderViT(nn.Module):
 
         # remove cls token
         x = x[:, 1:, :]
+        
 
         return x
 

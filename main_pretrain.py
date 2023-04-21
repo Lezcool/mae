@@ -52,6 +52,7 @@ def get_args_parser():
     parser.add_argument('--mlp_grl', action='store_true')
     parser.add_argument('--add_noise', action='store_true')
     parser.add_argument('--alttype', default='', type=str)
+    parser.add_argument('--no_da', action='store_true') #no data augmentation
     # Model parameters
     parser.add_argument('--model', default='mae_vit_large_patch16', type=str, metavar='MODEL',
                         help='Name of model to train')
@@ -163,7 +164,7 @@ def main(args):
     cudnn.benchmark = True
 
     # simple augmentation
-    if args.mask_type == 'random' or 'rand_soft':
+    if args.mask_type == 'random' or 'rand_soft' or args.no_da==True:
         transform_train = transforms.Compose([
                 transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
                 transforms.RandomHorizontalFlip(),

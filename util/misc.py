@@ -56,7 +56,7 @@ def sort_key(s):
     return pieces
 
 class EarlyStopping:
-    def __init__(self, patience=3, verbose=False, delta=1):
+    def __init__(self, patience=4, verbose=False, delta=1):
         self.patience = patience
         self.verbose = verbose
         self.delta = delta
