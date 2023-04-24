@@ -256,6 +256,8 @@ class MaskedAutoencoderViT(nn.Module):
         alpha = self.get_alpha(self.epoch,self.max_epoch)
         feat = self.maskmlp(feat,0.1*alpha)[:,1:,:].squeeze()  #alpha only for gradient reversal layer
         if len(feat.shape) == 1: feat = feat.unsqueeze(0) # if bacthsize=1
+        if self.add_noise:
+            feat = feat + torch.randn_like(feat)*0.1
         feat = (feat-feat.min(1)[0].unsqueeze(dim=-1))/((feat.max(1)[0]-feat.min(1)[0]).unsqueeze(dim=-1)) #norm each pateches
         self.mlp_varloss = -feat.var(axis=1).sum()*0.3 - 0.7* (feat[:,:-1]-feat[:,1:]).var(axis=1).sum() #try not to keep nearby patches
         self.mlp_varloss1 = -feat.var(axis=1).sum()
