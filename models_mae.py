@@ -101,7 +101,7 @@ class MaskedAutoencoderViT(nn.Module):
             Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
-        self.norm2 = norm_layer(embed_dim+1)
+        #self.norm2 = norm_layer(embed_dim+1) ?why? i dont remember
         # --------------------------------------------------------------------------
         self.mask_type = mask_type
         # --------------------------------------------------------------------------
