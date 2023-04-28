@@ -49,6 +49,7 @@ def get_args_parser():
     parser.add_argument('--log_name', default='', type=str)
     parser.add_argument('--comments', default=' ', type=str)
     parser.add_argument('--save_per', default=10, type=int)
+    parser.add_argument('--dataset_type', default='mini', type=str,help='mini or fullimgnet')
     # Model parameters
     parser.add_argument('--model', default='vit_large_patch16', type=str, metavar='MODEL',
                         help='Name of model to train')
@@ -158,16 +159,16 @@ def main(args):
             transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-    dataset = datasets.ImageFolder(args.data_path)#, transform=transform)
-    dataset_train,dataset_val,dataset_test = torch.utils.data.random_split(dataset,[0.7,0.2,0.1], generator=torch.Generator().manual_seed(42))
-    print('len of dataset_train,dataset_val,dataset_test = ',len(dataset_train),len(dataset_val),len(dataset_test))
-    dataset_train,dataset_val = Dataset_tf(dataset_train,transform_train),Dataset_tf(dataset_val,transform_val)
-    
+    if args.dataset_type=='mini':
+        dataset = datasets.ImageFolder(args.data_path)#, transform=transform)
+        dataset_train,dataset_val,dataset_test = torch.utils.data.random_split(dataset,[0.7,0.2,0.1], generator=torch.Generator().manual_seed(42))
+        print('len of dataset_train,dataset_val,dataset_test = ',len(dataset_train),len(dataset_val),len(dataset_test))
+        dataset_train,dataset_val = Dataset_tf(dataset_train,transform_train),Dataset_tf(dataset_val,transform_val)
     # dataset_train.transform = transform_train
     # dataset_val.transform=transform_val
-    
-    # dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
-    # dataset_val = datasets.ImageFolder(os.path.join(args.data_path, 'val'), transform=transform_val)
+    elif args.dataset_type=='fullimgnet':
+        dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
+        dataset_val = datasets.ImageFolder(os.path.join(args.data_path, 'val'), transform=transform_val)
     print(dataset_train)
     print(dataset_val)
 

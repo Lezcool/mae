@@ -50,6 +50,7 @@ def get_args_parser():
     parser.add_argument('--log_name', default='', type=str)
     parser.add_argument('--comments', default=' ', type=str)
     parser.add_argument('--save_per', default=10, type=int)
+    parser.add_argument('--dataset_type', default='mini', type=str,help='mini or fullimgnet')
     # Model parameters
     parser.add_argument('--model', default='vit_large_patch16', type=str, metavar='MODEL',
                         help='Name of model to train')
@@ -175,13 +176,16 @@ def main(args):
 
     #根据train or val决定是否data aug
     #由于没有train val文件夹，所以返回一样。
-    # dataset_train = build_dataset(is_train=True, args=args)
-    # dataset_val = build_dataset(is_train=False, args=args)
-    dataset = build_dataset(is_train=False, args=args)
-    train_size = int(0.8 * len(dataset))
-    test_size = len(dataset) - train_size
+    if args.dataset_type == 'fullimgnet':
+        dataset_train = build_dataset(is_train=True, args=args)
+        dataset_val = build_dataset(is_train=False, args=args)
     # dataset_train, dataset_val = torch.utils.data.random_split(dataset, [train_size, test_size])
-    dataset_train,dataset_val,dataset_test = torch.utils.data.random_split(dataset,[0.7,0.2,0.1], generator=torch.Generator().manual_seed(42))
+    elif args.dataset_type == 'mini':
+        dataset = build_dataset(is_train=False, args=args)
+        train_size = int(0.8 * len(dataset))
+        test_size = len(dataset) - train_size
+        
+        dataset_train,dataset_val,dataset_test = torch.utils.data.random_split(dataset,[0.7,0.2,0.1], generator=torch.Generator().manual_seed(42))
 
     if False:  # args.distributed == True:
         num_tasks = misc.get_world_size()

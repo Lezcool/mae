@@ -48,6 +48,7 @@ def get_args_parser():
     parser.add_argument('--comments', default='', type=str)
     parser.add_argument('--save_per', default=10, type=int)
     parser.add_argument('--log_name', default='', type=str)
+    parser.add_argument('--dataset_type', default='mini', type=str,help='mini or fullimgnet')
     parser.add_argument('--mask_type',default='random',type=str,help='random or mlpsoft or rand_soft')
     parser.add_argument('--mlp_grl', action='store_true')
     parser.add_argument('--add_noise', action='store_true')
@@ -179,10 +180,12 @@ def main(args):
                 transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3), 
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-    # dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
-    dataset = datasets.ImageFolder(args.data_path, transform=transform_train)
-    dataset_train,dataset_val,dataset_test = torch.utils.data.random_split(dataset,[0.7,0.2,0.1], generator=torch.Generator().manual_seed(42))
-    print('len of dataset_train,dataset_val,dataset_test = ',len(dataset_train),len(dataset_val),len(dataset_test))
+    if args.dataset_type == "fullimgnet":
+        dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
+    elif args.dataset_type == "mini":
+        dataset = datasets.ImageFolder(args.data_path, transform=transform_train)
+        dataset_train,dataset_val,dataset_test = torch.utils.data.random_split(dataset,[0.7,0.2,0.1], generator=torch.Generator().manual_seed(42))
+        print('len of dataset_train,dataset_val,dataset_test = ',len(dataset_train),len(dataset_val),len(dataset_test))
     # dataset_train.transform = transform_train
     # print(dataset_train)
 
