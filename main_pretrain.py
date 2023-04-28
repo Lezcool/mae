@@ -53,7 +53,6 @@ def get_args_parser():
     parser.add_argument('--add_noise', action='store_true')
     parser.add_argument('--no_da', action='store_true') #no data augmentation
     parser.add_argument('--alttype', default='', type=str)
-    parser.add_argument('--no_da', action='store_true') #no data augmentation
     # Model parameters
     parser.add_argument('--model', default='mae_vit_large_patch16', type=str, metavar='MODEL',
                         help='Name of model to train')
