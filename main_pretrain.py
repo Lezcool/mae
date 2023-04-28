@@ -53,7 +53,7 @@ def get_args_parser():
     parser.add_argument('--add_noise', action='store_true')
     parser.add_argument('--no_da', action='store_true') #no data augmentation
     parser.add_argument('--alttype', default='', type=str)
-    parser.add_argument('--no_da', action='store_true') #no data augmentation
+    parser.add_argument('--altepoch', default=1, type=int)
     # Model parameters
     parser.add_argument('--model', default='mae_vit_large_patch16', type=str, metavar='MODEL',
                         help='Name of model to train')
@@ -165,7 +165,7 @@ def main(args):
     cudnn.benchmark = True
 
     # simple augmentation
-    if args.mask_type == 'random' or 'rand_soft' or args.no_da==True:
+    if args.no_da==True:
         transform_train = transforms.Compose([
                 transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
                 transforms.RandomHorizontalFlip(),
@@ -173,9 +173,10 @@ def main(args):
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
     else:
         transform_train = transforms.Compose([
-                transforms.Resize(args.input_size, interpolation=3),  # 3 is bicubic
-                transforms.RandomRotation(), 
+                #transforms.RandomRotation(), 
                 transforms.AutoAugment(),
+                #transforms.Resize(args.input_size, interpolation=3), # 3 is bicubic
+                transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3), 
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
     # dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
@@ -266,7 +267,7 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         # if epoch ==  args.epochs//2 and model.maskmlp.grl ==False: 
         #     model.maskmlp.grl = True
-        if epoch >= 10 and args.alttype == 'random':
+        if epoch > args.altepoch and args.alttype == 'random':
             model.mask_type = 'random'
 
         model.epoch = epoch
@@ -283,9 +284,7 @@ def main(args):
             misc.save_model(
                 args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                 loss_scaler=loss_scaler, epoch=epoch)
-            if epoch % args.save_per == 0:
-                pass
-            else:
+            if epoch % args.save_per != 0:
                 pthfile = os.path.join(args.output_dir,f'checkpoint-{epoch-1}.pth')
                 if os.path.exists(pthfile):
                     os.remove(pthfile)

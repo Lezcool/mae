@@ -357,8 +357,6 @@ def main(args):
                 args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                 loss_scaler=loss_scaler, epoch=epoch)
             if epoch % args.save_per == 0:
-                pass
-            else:
                 pthfile = os.path.join(args.output_dir,f'checkpoint-{epoch-1}.pth')
                 if os.path.exists(pthfile):
                     os.remove(pthfile)
