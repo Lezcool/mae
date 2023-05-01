@@ -80,6 +80,7 @@ def get_args_parser():
     # Dataset parameters
     parser.add_argument('--data_path', default='C:/Users/lewa/Documents/PhD/dataset/mini_imgnet_ori', type=str,
                         help='dataset path')
+    parser.add_argument('--val_path', default='/work3/lewa/imagenet-val', type=str,help='valset path')
     parser.add_argument('--nb_classes', default=100, type=int,
                         help='number of the classification types')
 
@@ -168,7 +169,7 @@ def main(args):
     # dataset_val.transform=transform_val
     elif args.dataset_type=='fullimgnet':
         dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
-        dataset_val = datasets.ImageFolder(os.path.join(args.data_path, 'val'), transform=transform_val)
+        dataset_val = datasets.ImageFolder(os.path.join(args.val_path), transform=transform_val)
     print(dataset_train)
     print(dataset_val)
 

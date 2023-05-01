@@ -123,6 +123,7 @@ def get_args_parser():
     # Dataset parameters
     parser.add_argument('--data_path', default='C:/Users/lewa/Documents/PhD/dataset/mini_imgnet_ori', type=str,
                         help='dataset path')
+    parser.add_argument('--val_path', default='/work3/lewa/imagenet-val', type=str,help='valset path')
     parser.add_argument('--nb_classes', default=100, type=int,
                         help='number of the classification types')
 

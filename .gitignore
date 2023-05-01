@@ -398,3 +398,4 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 bash/*
+output_dir/*
